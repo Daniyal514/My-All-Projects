@@ -1,0 +1,372 @@
+import os
+import cv2
+import glob
+import time
+import face_recognition
+from datetime import datetime
+from tkinter import *
+from tkinter import messagebox
+from PIL import Image, ImageTk
+from tkinter import ttk
+import firebase_admin
+from firebase_admin import credentials, firestore
+from tkinter import filedialog
+
+# Initialize Firebase
+cred = credentials.Certificate("cerd.json")
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+def capture_images(class_name):
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    cap = cv2.VideoCapture(0)
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter(f"D:/here we code/FYP/Room_Name/Captured_Data/{datetime.now().strftime('%Y-%m-%d')}/{class_name}/output.avi", fourcc, 20.0, (640, 480))
+    start_time = time.time()
+    img_counter = 0
+    dir_name = f"D:/here we code/FYP/Room_Name/Captured_Data/{datetime.now().strftime('%Y-%m-%d')}/{class_name}/"
+
+    while (time.time() - start_time) < 15 * 60:
+        ret, frame = cap.read()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+
+        if len(faces) > 0:
+            for (x, y, w, h) in faces:
+                face_region = frame[y:y+h, x:x+w]  # Extract the face region
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                if not os.path.exists(dir_name):
+                    os.makedirs(dir_name)
+                img_name = f"{dir_name}image{img_counter}.png"
+                cv2.imwrite(img_name, face_region)  # Save the face region
+                img_counter += 1
+        out.write(frame)
+        cv2.imshow('Video', frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
+    return dir_name
+
+def recognize_faces(dir_name):
+        # Initialize an empty set to hold roll numbers
+    roll_nos = set()
+
+    # Initialize lists to hold known face encodings and roll numbers
+    known_face_encodings = []
+    known_face_roll_nos = []
+
+    # Load labeled images
+    labeled_images = glob.glob('D:\\here we code\\FYP\\Room_Name\\Labeled_Data\\*.jpg')
+
+    cv2.waitKey(0)
+    for image_path in labeled_images:
+
+        # Load the labeled image
+        labeled_image = face_recognition.load_image_file(image_path)
+
+        # Get the face encodings for the labeled image
+        labeled_face_encodings = face_recognition.face_encodings(labeled_image)
+
+        if len(labeled_face_encodings) > 0:
+            # If a face is found in the labeled image, add the face encoding to known_face_encodings
+            known_face_encodings.append(labeled_face_encodings[0])
+
+            # Extract the roll number from the filename
+            roll_no = os.path.splitext(os.path.basename(image_path))[0]
+            known_face_roll_nos.append(roll_no)
+
+    # Load captured images
+    captured_images = glob.glob(dir_name)  # Replace with the actual path
+
+    for image_path in captured_images:
+        print("ok")
+        # Load the captured image
+        captured_image = face_recognition.load_image_file(image_path)
+
+        # Get the face encodings for the captured image
+        captured_face_encodings = face_recognition.face_encodings(captured_image)
+
+        if len(captured_face_encodings) > 0:
+            # If a face is found in the captured image, compare it with known_face_encodings
+            matches = face_recognition.compare_faces(known_face_encodings, captured_face_encodings[0])
+
+            # If a match is found, find the matching roll number and add it to roll_nos
+            if True in matches:
+                match_index = matches.index(True)
+                roll_nos.add(known_face_roll_nos[match_index])
+
+    # Print the roll numbers
+    return list(roll_nos)
+
+def mark_attendance(roll_nos, class_name):
+    # Get the current date in YYYY-MM-DD format
+    global current_date
+    current_date = current_date = datetime.now().strftime('%Y-%m-%d')
+
+    # Check if the current date exists in the database
+    attendance_ref = db.collection('attendance').document(current_date)
+    attendance_doc = attendance_ref.get()
+
+    if attendance_doc.exists:
+        # If the date exists, update the document
+        attendance_ref.update({
+            class_name: roll_nos
+        })
+    else:
+        # If the date doesn't exist, create a new document
+        attendance_ref.set({
+            'date': current_date,
+            class_name: roll_nos
+        })
+
+    print("Attendence Marked")
+#Delete Captured Images
+def delete_images_from_path(dir_name):
+    img_files = glob.glob(dir_name + "*.png")
+    for img_file in img_files:
+        os.remove(img_file)
+    print("Images Deleted")
+
+def open_window_2():
+    window2 = Toplevel()
+    window2.title("Attendence")
+    window2.geometry("800x500")
+    window2.wm_iconbitmap("file.ico")
+    window2.resizable(False,False)
+
+    def get_schedule():
+        class_name = SubjectTable.get()
+        current_time = datetime.now().time()
+        class_start_time = datetime.strptime(schedule.get(class_name, ('00:00', '00:00'))[0], '%H:%M').time()
+        class_end_time = datetime.strptime(schedule.get(class_name, ('00:00', '00:00'))[1], '%H:%M').time()
+
+        if class_name not in schedule:
+            message.set(f"The class {class_name} is not in the schedule.")
+            message_label.config(fg="red")
+            class_name=0
+        elif current_time < class_start_time:
+            message.set(f"The {class_name} class hasn't started yet.\n It is scheduled to start at {schedule[class_name][0]}.")
+            message_label.config(fg="red")
+            class_name=0
+        elif current_time > class_end_time:
+            message.set(f"Sorry, {class_name} class has already ended.\n It was scheduled to end at {schedule[class_name][1]}.")
+            message_label.config(fg="red")
+            class_name=0
+        else:
+            message.set(f"{class_name} Attendance Collected Successfully")
+            message_label.config(fg="green")
+            #Show Attendence Function
+            def show_attendance():
+                # Create a new Tkinter window
+                window4 = Toplevel()
+                window4.geometry("800x500")
+                window4.title("Marked Attendance")
+
+                window4.wm_iconbitmap("file.ico")
+                window4.resizable(False,False)
+                # Create a label and listbox to display the Maths array
+                att_lbl=Label(window4,text=f"{class_name} Attendance",font=("times new roman",25,"bold"))
+                att_lbl.place(x=180,y=200)
+
+                listbox =Listbox(window4, width=40)
+                listbox.place(x=180,y=300)
+
+                # Get the Maths array from Firestore
+                doc_ref = db.collection('attendance').document(f"{current_date}")
+                doc = doc_ref.get()
+
+                if doc.exists:
+                    document_data = doc.to_dict()
+                    attandence_array = document_data[f"{class_name}"]
+
+                    # Insert the Maths array into the listbox
+                    for item in attandence_array:
+                        listbox.insert(END, item)
+
+                # Add a button to close the window
+                close_button =Button(window4, text="Close", command=window4.destroy)
+                close_button.place(x=180,y=500)
+            ShowAttendence=Button(window2, text="Show Attendence", bg='#163A5F',fg="white", font=("arial", "12"),command=show_attendance)
+            ShowAttendence.place(x=600, y=298)
+
+
+        g_class_name=class_name
+
+        if g_class_name in schedule:
+            if not os.path.exists(f'Room_Name/Captured_Data/{datetime.now().strftime("%Y-%m-%d")}/{g_class_name}'):
+                os.makedirs(f'Room_Name/Captured_Data/{datetime.now().strftime("%Y-%m-%d")}/{g_class_name}')
+
+            dir_name = capture_images(g_class_name)
+            dir_name = dir_name + "*.png"
+            roll_nos = recognize_faces(dir_name)
+            print(roll_nos)
+            mark_attendance(roll_nos,g_class_name)
+            #Delete Captured Images
+            delete_images_from_path(dir_name)
+
+
+
+
+
+    schedule = {
+        'Maths': ('9:15', '14:00'),
+        'English': ('8:00', '11:45'),
+        'Physics': ('13:00', '14:15'),
+        'Chemistry': ('23:00', '23:55')
+    }
+
+    window2_img = Image.open("file.png")
+    window2_resized_img = window2_img.resize((150, 150))
+    window2_photo = ImageTk.PhotoImage(window2_resized_img)
+    window2_imglabel = Label(window2, image=window2_photo)
+    window2_imglabel.image = window2_photo
+    window2_imglabel.place(x=320, y=20)
+    window2_main_lbl = Label(window2, text="Automated Attendance System", font=("times new roman", 25, "bold"))
+    window2_main_lbl.place(x=180, y=200)
+    window2_subjecttab = Label(window2, text="Subject", font=("times new roman", 17, "bold"), pady=-100)
+    window2_subjecttab.place(x=210, y=300)
+    SubjectTable = ttk.Combobox(window2, width=40, font=("times new roman", 10), values=("English", "Maths", "Physics", "Chemistry"))
+    SubjectTable.set("Select Subject")
+    SubjectTable.place(x=310, y=304)
+    StartButton = Button(window2, text="Start", bg='#163A5F', fg="white", font=("arial", 15, "bold"),width=20, command=get_schedule)
+    StartButton.place(x=295, y=400)
+    message =StringVar()
+    # Create a Label to display the message
+    message_label =Label(window2, textvariable=message, font=("arial", "12"))
+    message_label.place(x=300, y=330)
+
+
+def open_window_3():
+    window3 = Toplevel()
+    window3.title("Third Window")
+    window3.geometry("800x500")
+    window3.wm_iconbitmap("file.ico")
+    window3.resizable(False,False)
+
+    # Specify the path of the folder
+    folder_path = "D:\here we code\FYP\Room_Name\Labeled_Data"  # Replace with your desired folder path
+
+    # Function to add image
+    import shutil
+
+    def add_image():
+        image_title = title_entry1.get()
+        if not image_title :
+            messagebox.showerror("Error", "Enter ID for student image first")
+            return
+        image_path = filedialog.askopenfilename(title="Select Image", filetypes=(("Image Files", ".jpg;.jpeg;*.png"),))
+        if image_path:
+            image_ext = os.path.splitext(image_path)[1]  # Get the file extension
+            new_image_path = os.path.join(folder_path, f"{image_title}{image_ext}")
+            try:
+                shutil.copy2(image_path, new_image_path)
+                message2.set("Image added sucessfully.")
+                message_label_add.config(fg="green")
+            except Exception as e:
+                print(f"Error: {str(e)}")
+
+    # Function to delete image
+    def delete_image():
+        image_title = title_entry2.get()
+        for file in os.listdir(folder_path):
+            if file == f"{image_title}{os.path.splitext(file)[1]}":
+                os.remove(os.path.join(folder_path, file))
+                message1.set("Image deleted sucessfully.")
+                message_label_del.config(fg="green")
+                break
+        else:
+            message1.set("Image not found.")
+            message_label_del.config(fg="red")
+
+    # Create UI elements
+    img=Image.open("file.png")
+    resized_img = img.resize((150,150))
+    photo=ImageTk.PhotoImage(resized_img)
+    imglabel = Label(window3, image=photo,)
+    imglabel.place(x=320,y=20)
+
+    main_lbl=Label(window3,text="Automated Attendence System",font=("times new roman",25,"bold"))
+    main_lbl.place(x=180,y=200)
+
+    title_label1 = Label(window3, text="Firstly Enter Rollno for Image:")
+    title_label1.place(x=180, y=300)
+    title_entry1 = Entry(window3, width=50)
+    title_entry1.place(x=180, y=320)
+
+    add_button = Button(window3, text="Add Image",width=12, bg='#163A5F', fg="white",font=("arial", 12,), command=add_image)
+    add_button.place(x=530,y=315)
+
+    title_label2 = Label(window3, text="Enter Roll no of image:")
+    title_label2.place(x=180, y=370)
+    title_entry2 = Entry(window3, width=50)
+    title_entry2.place(x=180, y=390)
+
+    delete_button = Button(window3, text="Delete Image", bg='#163A5F', fg="white",width=12,font=("arial", 12,), command=delete_image)
+    delete_button.place(x=530,y=383)
+
+
+    message1 =StringVar()
+    message2 =StringVar()
+    # Create a Label to display the message
+    message_label_del =Label(window3, textvariable=message1, font=("arial", "12"))
+    message_label_del.place(x=180, y=410)
+    message_label_add =Label(window3, textvariable=message2, font=("arial", "12"))
+    message_label_add.place(x=180, y=340)
+
+
+    window3.mainloop()
+
+def open_password_prompt():
+    def check_password():
+
+        if password_entry.get() == "1234":
+            password_prompt.destroy()
+            open_window_3()
+        else:
+            messagebox.showerror("Error", "Incorrect Password")
+
+    password_prompt = Toplevel()
+    password_prompt.title("Password Required")
+    password_prompt.geometry("300x150")
+    password_prompt.wm_iconbitmap("file.ico")
+    password_prompt.resizable(False,False)
+
+
+    Label(password_prompt, text="Enter Password:", font=("times new roman", 14,"bold")).pack(pady=10)
+    password_entry = Entry(password_prompt, show='*', font=("times new roman", 14))
+    password_entry.pack(pady=5)
+    Button(password_prompt, text="Submit",font=("arial") ,bg='#163A5F',fg="white", command=check_password).pack(pady=5)
+
+def main():
+
+    root = Tk()
+    root.title("AU Attendence System")
+    root.geometry("800x500")
+    #------------------"ICON"--------------------------
+    root.wm_iconbitmap("file.ico")
+    root.resizable(False,False)
+    #------------------"LOGO"--------------------------
+    img=Image.open("file.png")
+    resized_img = img.resize((150,150))
+    photo=ImageTk.PhotoImage(resized_img)
+    imglabel = Label(root, image=photo,)
+    imglabel.place(x=320,y=20)
+    #----------------"TITLE"-------------------------
+    main_lbl=Label(root,text="Automated Attendence System",font=("times new roman",25,"bold"))
+    main_lbl.place(x=180,y=200)
+    # Connect the button to the Window 3 function
+    Admin = Button(root, text="Admin", bg='#163A5F', fg="white", font=("arial", 12, "bold"), width=15, command=open_password_prompt)
+    Admin.place(x=450, y=350)
+
+    # Connect the button to the Window 2 function
+    Attendence=Button(root, text="Attendence", bg='#163A5F',fg="white", font=("arial", "12", "bold"), width=15, command=open_window_2)
+    Attendence.place(x=180, y=350)
+
+    root.mainloop()
+
+
+if _name_ == "_main_":
+    main()
